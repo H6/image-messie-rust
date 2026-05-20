@@ -7,13 +7,25 @@ use exif::{In, Reader, Tag, Value};
 use crate::models::ExifData;
 
 /// Extract EXIF metadata from the given image file.
-/// Returns `Err` if the file cannot be opened or contains no EXIF data.
+///
+/// Returns `Ok(ExifData)` in all cases where the file itself is readable:
+/// - Full metadata found → all fields populated.
+/// - No EXIF container (e.g. JFIF JPEG, PNG without EXIF) → all fields `None`.
+/// - Invalid date field → date fields set to 2000-01-01 fallback, `date_warning` set.
+///
+/// Returns `Err` only for genuine IO errors (file not found, permission denied).
 pub fn extract_exif(path: &Path) -> Result<ExifData> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut reader = BufReader::new(file);
-    let exif = Reader::new()
-        .read_from_container(&mut reader)
-        .with_context(|| format!("reading EXIF from {}", path.display()))?;
+
+    let exif = match Reader::new().read_from_container(&mut reader) {
+        Ok(e) => e,
+        Err(_) => {
+            // File is readable but has no EXIF APP1 segment (e.g. JFIF, stripped JPEG).
+            // Return empty ExifData — organizer routes it to UNKNOWN/.
+            return Ok(ExifData::default());
+        }
+    };
 
     let mut data = ExifData::default();
 
@@ -29,15 +41,13 @@ pub fn extract_exif(path: &Path) -> Result<ExifData> {
                 data.month_name = Some(dt.format("%B").to_string());
             }
             Err(_) => {
-                // Mirrors Python behaviour: warn (caller handles), default to 2000-01-01.
+                // Mirrors Python: warn, default to 2000-01-01, continue processing.
                 let fallback = chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
                 data.year = Some("2000".into());
                 data.month = Some("01".into());
                 data.day = Some("01".into());
                 data.month_name = Some(fallback.format("%B").to_string());
-                // Signal invalid date via a sentinel so the caller can print a warning.
-                // We return Err here; the caller will handle the "InvalidDate" prefix.
-                return Err(anyhow::anyhow!("InvalidDate:{}:{}", "2000-01-01", raw.trim()));
+                data.date_warning = Some(raw.trim().to_string());
             }
         }
     }
@@ -94,18 +104,28 @@ mod tests {
     }
 
     /// The example JPEG is a JFIF file (APP0 marker) with no EXIF APP1 segment.
-    /// `extract_exif` must return `Err` — not panic — when no EXIF container exists.
+    /// `extract_exif` must return `Ok` with all-None fields (not panic, not Err),
+    /// so the file is routed to UNKNOWN/ rather than treated as unreadable.
     #[test]
-    fn example_jpeg_without_exif_returns_err_gracefully() {
+    fn example_jpeg_without_exif_returns_empty_ok() {
         let path = example_image_path();
         assert!(path.exists(), "example image not found at {}", path.display());
 
         let result = extract_exif(&path);
 
         assert!(
-            result.is_err(),
-            "Expected Err for a JFIF JPEG with no EXIF APP1, but got Ok({:?})",
-            result.unwrap()
+            result.is_ok(),
+            "Expected Ok for a readable JFIF JPEG (even without EXIF), but got Err({:?})",
+            result.unwrap_err()
+        );
+
+        let exif = result.unwrap();
+        assert!(
+            exif.year.is_none()
+                && exif.month.is_none()
+                && exif.camera_model.is_none()
+                && exif.date_warning.is_none(),
+            "Expected all-None ExifData for JFIF with no EXIF, got: {exif:?}"
         );
     }
 

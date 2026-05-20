@@ -31,6 +31,10 @@ pub struct ExifData {
     pub camera_model: Option<String>,
     pub gps_lat: Option<String>,
     pub gps_lon: Option<String>,
+    /// Set when the DateTime field was present but could not be parsed.
+    /// Contains the raw invalid date string. The date fields are filled
+    /// with the 2000-01-01 fallback when this is Some.
+    pub date_warning: Option<String>,
 }
 
 /// Outcome of processing one file — kept for future use.

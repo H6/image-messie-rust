@@ -64,41 +64,31 @@ fn main() -> Result<()> {
         let exif_data = match exif_result {
             Ok(data) => data,
             Err(e) => {
-                let msg = e.to_string();
-                // Detect our sentinel for invalid-but-parseable date.
-                if msg.starts_with("InvalidDate:") {
-                    let parts: Vec<&str> = msg.splitn(3, ':').collect();
-                    let raw_date = parts.get(2).copied().unwrap_or("?");
-                    eprintln!(
-                        "{}",
-                        format!(
-                            "Invalid date '{}' in {}. Defaulting to 2000-01-01.",
-                            raw_date, file.filename
-                        )
-                        .red()
-                        .bold()
-                    );
-                    // exif::extract_exif returns Ok(data) inside the Err — unreachable here.
-                    // We hit this branch only when the error truly propagates.
-                    // Fall through to UNKNOWN.
-                    stats.total_non_images += 1;
-                    process_unknown(&file, &args, &mut stats);
-                    continue;
-                }
+                // Only genuine IO errors (permission denied, file not found) reach here.
                 eprintln!(
                     "{}",
-                    format!(
-                        "Error opening {}. Seems to be no image file.",
-                        file.filename
-                    )
-                    .red()
-                    .bold()
+                    format!("Error opening {}: {}.", file.filename, e)
+                        .red()
+                        .bold()
                 );
                 stats.total_non_images += 1;
                 process_unknown(&file, &args, &mut stats);
                 continue;
             }
         };
+
+        // Warn about invalid date fields (file continues to be processed with 2000-01-01 fallback).
+        if let Some(raw_date) = &exif_data.date_warning {
+            eprintln!(
+                "{}",
+                format!(
+                    "Invalid date '{}' in {}. Set to 2000-01-01.",
+                    raw_date, file.filename
+                )
+                .red()
+                .bold()
+            );
+        }
 
         // ── Determine target path ─────────────────────────────────────────────
         let (target_dir, is_unknown) = organizer::target_dir(&args.destination, &exif_data);
@@ -117,13 +107,13 @@ fn main() -> Result<()> {
 
         // ── Copy or dry-run log ───────────────────────────────────────────────
         let dest_filename = organizer::resolve_destination_filename(&target_dir, &file);
+        let dest_path_display = target_dir.join(&dest_filename);
 
         if args.dry_run {
             println!(
-                "Would copy {} → {}/{}",
+                "Would copy {} → {}",
                 file.filename.cyan(),
-                target_dir.display().cyan(),
-                dest_filename.cyan()
+                dest_path_display.display().cyan()
             );
         } else {
             if args.verbose {
@@ -137,16 +127,10 @@ fn main() -> Result<()> {
                 Ok(dest_path) => {
                     println!(
                         "{}",
-                        format!(
-                            "📁 Copying {} to \"{}/{}\"",
-                            file.filename,
-                            target_dir.display(),
-                            dest_filename
-                        )
-                        .green()
-                        .bold()
+                        format!("📁 Copying {} to \"{}\"", file.filename, dest_path.display())
+                            .green()
+                            .bold()
                     );
-                    let _ = dest_path;
                 }
                 Err(e) => {
                     eprintln!(
@@ -173,25 +157,21 @@ fn process_unknown(
     let target_dir = args.destination.join("UNKNOWN");
     let dest_filename = organizer::resolve_destination_filename(&target_dir, file);
 
+    let dest_path_display = target_dir.join(&dest_filename);
+
     if args.dry_run {
         println!(
-            "Would copy {} → {}/{}",
+            "Would copy {} → {}",
             file.filename.cyan(),
-            target_dir.display().cyan(),
-            dest_filename.cyan()
+            dest_path_display.display().cyan()
         );
     } else {
         match organizer::copy_file(&file.path, &target_dir, &dest_filename) {
-            Ok(_) => println!(
+            Ok(dest_path) => println!(
                 "{}",
-                format!(
-                    "📁 Copying {} to \"{}/{}\"",
-                    file.filename,
-                    target_dir.display(),
-                    dest_filename
-                )
-                .green()
-                .bold()
+                format!("📁 Copying {} to \"{}\"", file.filename, dest_path.display())
+                    .green()
+                    .bold()
             ),
             Err(e) => eprintln!(
                 "{}",
