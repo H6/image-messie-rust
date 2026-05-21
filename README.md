@@ -1,6 +1,12 @@
 # image-messie-rust
 
+<p align="center">
+  <img src="image-messie.png" alt="Image Messie mascot — a Messie character surrounded by chaotic piles of stuff" width="300"/>
+</p>
+
 A fast, colorful CLI tool that organizes messy image collections into a clean folder hierarchy based on EXIF metadata. Rust port of [image-messie](../image-messie).
+
+_Messie [ˈmɛsiː]: german word for a compulsive hoarder._
 
 ## What it does
 
