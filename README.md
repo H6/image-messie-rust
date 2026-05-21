@@ -104,9 +104,30 @@ src/
 
 ## Run tests
 
+Run the full test suite:
+
 ```powershell
 cargo test
 ```
+
+Run only a specific test by name (substring match):
+
+```powershell
+cargo test dsc_jpeg
+```
+
+Show `println!` output from passing tests:
+
+```powershell
+cargo test -- --nocapture
+```
+
+The unit tests in `src/exif.rs` use the real sample images in `examples/` — in particular `examples/DSC_0354.JPG` (a Nikon D3300 JPEG with full EXIF). The tests verify:
+
+- Correct date extraction (`year = 2023`, `month = 03`, `month_name = March`)
+- Correct camera model normalization (`NIKON_D3300`)
+- Scanner discovery of `.JPG` files
+- Correct target directory routing (`2023/03_March/NIKON_D3300`)
 
 ## Dependencies
 

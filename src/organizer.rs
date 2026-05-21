@@ -19,7 +19,8 @@ pub fn target_dir(destination: &Path, exif: &ExifData) -> (PathBuf, bool) {
     ) {
         (Some(y), Some(m), Some(mn), Some(cam)) => {
             let month_folder = format!("{}_{}", m, mn);
-            (destination.join(y).join(month_folder).join(cam), false)
+            let cam_folder = cam.to_uppercase().replace(' ', "_");
+            (destination.join(y).join(month_folder).join(cam_folder), false)
         }
         _ => (destination.join("UNKNOWN"), true),
     }

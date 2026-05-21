@@ -55,8 +55,7 @@ pub fn extract_exif(path: &Path) -> Result<ExifData> {
     // ── Camera Model ─────────────────────────────────────────────────────────
     if let Some(field) = exif.get_field(Tag::Model, In::PRIMARY) {
         let raw = field_to_string(&field.value);
-        let normalized = raw.trim().to_uppercase().replace(' ', "_");
-        data.camera_model = Some(normalized);
+        data.camera_model = Some(raw.trim().to_string());
     }
 
     // ── GPS (parsed but not used for organization) ───────────────────────────
@@ -89,33 +88,34 @@ mod tests {
     use crate::scanner::scan_images;
     use std::path::Path;
 
-    fn example_image_path() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("examples")
-            .join("048DF200-5E2F-455B-866D-2BD51A9A77E5.jpeg")
+    #[test]
+    fn organizer_normalizes_camera_model_for_directory() {
+        // Normalization (spaces → underscores, uppercase) now happens in organizer::target_dir.
+        let exif = ExifData {
+            year: Some("2024".into()),
+            month: Some("01".into()),
+            month_name: Some("January".into()),
+            camera_model: Some("Canon EOS R5".into()),
+            ..ExifData::default()
+        };
+        let (dir, is_unknown) = target_dir(Path::new("/dst"), &exif);
+        assert!(!is_unknown);
+        assert_eq!(dir, Path::new("/dst/2024/01_January/CANON_EOS_R5"));
     }
 
+    /// A non-image file (e.g. Cargo.toml) has no EXIF container.
+    /// `extract_exif` must return `Ok` with all-None fields rather than `Err`,
+    /// so such files would be routed to UNKNOWN/ rather than treated as unreadable.
     #[test]
-    fn camera_model_normalizes_spaces_to_underscores() {
-        // Pure logic test — no file needed.
-        let raw = "Canon EOS R5 ";
-        let normalized = raw.trim().to_uppercase().replace(' ', "_");
-        assert_eq!(normalized, "CANON_EOS_R5");
-    }
-
-    /// The example JPEG is a JFIF file (APP0 marker) with no EXIF APP1 segment.
-    /// `extract_exif` must return `Ok` with all-None fields (not panic, not Err),
-    /// so the file is routed to UNKNOWN/ rather than treated as unreadable.
-    #[test]
-    fn example_jpeg_without_exif_returns_empty_ok() {
-        let path = example_image_path();
-        assert!(path.exists(), "example image not found at {}", path.display());
+    fn file_without_exif_returns_empty_ok() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert!(path.exists(), "Cargo.toml not found at {}", path.display());
 
         let result = extract_exif(&path);
 
         assert!(
             result.is_ok(),
-            "Expected Ok for a readable JFIF JPEG (even without EXIF), but got Err({:?})",
+            "Expected Ok for a readable file with no EXIF, but got Err({:?})",
             result.unwrap_err()
         );
 
@@ -125,7 +125,7 @@ mod tests {
                 && exif.month.is_none()
                 && exif.camera_model.is_none()
                 && exif.date_warning.is_none(),
-            "Expected all-None ExifData for JFIF with no EXIF, got: {exif:?}"
+            "Expected all-None ExifData for a file with no EXIF, got: {exif:?}"
         );
     }
 
@@ -140,10 +140,56 @@ mod tests {
         assert_eq!(dir, Path::new("/dst/UNKNOWN"));
     }
 
-    /// The scanner must discover the example JPEG even though it has no EXIF.
-    /// Extension matching (`.jpeg`) is independent of file content.
+    /// The scanner must discover all images in the examples/ directory.
+    /// Only DSC_0354.JPG is present; verify the total count matches.
     #[test]
-    fn example_jpeg_is_discovered_by_scanner() {
+    fn examples_dir_contains_exactly_one_image() {
+        let examples_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+        assert!(
+            examples_dir.exists(),
+            "examples/ directory not found at {}",
+            examples_dir.display()
+        );
+
+        let found: Vec<_> = scan_images(&examples_dir).collect();
+
+        assert_eq!(found.len(), 1, "Expected exactly one image in examples/");
+        assert_eq!(found[0].filename, "DSC_0354.JPG");
+    }
+
+    fn dsc_image_path() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("DSC_0354.JPG")
+    }
+
+    /// DSC_0354.JPG is a real Nikon JPEG with full EXIF data.
+    /// Verify that `extract_exif` returns the expected date and camera model.
+    #[test]
+    fn dsc_jpeg_exif_fields_are_correct() {
+        let path = dsc_image_path();
+        assert!(path.exists(), "example image not found at {}", path.display());
+
+        let exif = extract_exif(&path)
+            .expect("extract_exif should succeed for a valid JPEG with EXIF");
+
+        assert_eq!(exif.year.as_deref(), Some("2023"), "year mismatch");
+        assert_eq!(exif.month.as_deref(), Some("03"), "month mismatch");
+        assert_eq!(exif.month_name.as_deref(), Some("March"), "month_name mismatch");
+        assert_eq!(
+            exif.camera_model.as_deref(),
+            Some("NIKON D3300"),
+            "camera_model mismatch"
+        );
+        assert!(
+            exif.date_warning.is_none(),
+            "no date_warning expected for a well-formed EXIF DateTime"
+        );
+    }
+
+    /// DSC_0354.JPG must be picked up by the scanner (`.JPG` extension).
+    #[test]
+    fn dsc_jpeg_is_discovered_by_scanner() {
         let examples_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
         assert!(
             examples_dir.exists(),
@@ -152,21 +198,31 @@ mod tests {
         );
 
         let found: Vec<_> = scan_images(&examples_dir)
-            .filter(|f| f.filename == "048DF200-5E2F-455B-866D-2BD51A9A77E5.jpeg")
+            .filter(|f| f.filename == "DSC_0354.JPG")
             .collect();
 
-        assert_eq!(
-            found.len(),
-            1,
-            "Scanner should find exactly one matching file"
-        );
+        assert_eq!(found.len(), 1, "Scanner should find exactly one DSC_0354.JPG");
 
         let file = &found[0];
-        assert_eq!(file.extension, "jpeg");
+        assert_eq!(file.extension, "jpg");
+        assert_eq!(file.stem, "dsc_0354");
         assert!(file.size_bytes > 0, "File size should be non-zero");
-        println!(
-            "Discovered: {} ({} bytes)",
-            file.filename, file.size_bytes
+    }
+
+    /// DSC_0354.JPG with full EXIF must be routed to 2023/03_March/NIKON_D3300/.
+    #[test]
+    fn dsc_jpeg_routes_to_correct_target_dir() {
+        let path = dsc_image_path();
+        assert!(path.exists(), "example image not found at {}", path.display());
+
+        let exif = extract_exif(&path).expect("extract_exif should succeed");
+        let (dir, is_unknown) = target_dir(Path::new("/dst"), &exif);
+
+        assert!(!is_unknown, "DSC_0354.JPG should not route to UNKNOWN/");
+        assert_eq!(
+            dir,
+            Path::new("/dst/2023/03_March/NIKON_D3300"),
+            "unexpected target directory"
         );
     }
 }
